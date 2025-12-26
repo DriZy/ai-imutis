@@ -109,6 +109,13 @@ FastAPI provides superior performance for AI/ML-heavy workloads with native asyn
 
 **Architecture Pattern:** RESTful API with WebSocket support for real-time features
 
+**API Documentation:** Automatic OpenAPI/Swagger documentation
+- **Swagger UI:** Available at `/docs` (interactive API testing)
+- **ReDoc:** Available at `/redoc` (clean documentation interface)
+- **OpenAPI Schema:** Available at `/openapi.json` (machine-readable spec)
+- **Auto-generated:** All endpoints documented automatically via Pydantic models
+- **Authentication:** Swagger UI supports Firebase token testing
+
 **Core Endpoints:**
 - **Travel Routes:**
   - `GET /api/travels` - List available routes
@@ -148,6 +155,50 @@ FastAPI provides superior performance for AI/ML-heavy workloads with native asyn
   - Store device IP in device_sessions table for every request
   - Track session continuity using IP + Firebase UID combination
   - Implement IP rotation detection for security
+- **Swagger/OpenAPI Configuration:**
+  ```python
+  from fastapi import FastAPI
+  from fastapi.openapi.utils import get_openapi
+  
+  app = FastAPI(
+      title="AI-IMUTIS API",
+      description="Inter-Urban Mobility and Tourism Information System",
+      version="1.0.0",
+      contact={
+          "name": "AI-IMUTIS Team",
+          "email": "support@ai-imutis.com",
+      },
+      license_info={
+          "name": "MIT",
+      },
+      docs_url="/docs",
+      redoc_url="/redoc",
+      openapi_url="/openapi.json",
+  )
+  
+  # Custom OpenAPI schema with security
+  def custom_openapi():
+      if app.openapi_schema:
+          return app.openapi_schema
+      openapi_schema = get_openapi(
+          title="AI-IMUTIS API",
+          version="1.0.0",
+          description="Complete API for mobility and tourism management",
+          routes=app.routes,
+      )
+      openapi_schema["components"]["securitySchemes"] = {
+          "FirebaseAuth": {
+              "type": "http",
+              "scheme": "bearer",
+              "bearerFormat": "JWT",
+              "description": "Firebase ID Token",
+          }
+      }
+      app.openapi_schema = openapi_schema
+      return app.openapi_schema
+  
+  app.openapi = custom_openapi
+  ```
   - Log IP changes per session for fraud detection
 - Role-based access control (RBAC) stored in database (admin, premium, standard)
 - Structured logging to cloud logging service (Cloud Logging, DataDog, or Sentry)

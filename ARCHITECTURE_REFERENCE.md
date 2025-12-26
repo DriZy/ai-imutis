@@ -2,7 +2,211 @@
 
 ---
 
-## System Architecture Diagram
+## 1. API Documentation (Swagger/OpenAPI)
+
+### 1.1 Documentation Endpoints
+
+**Automatic API Documentation:**
+```
+GET /docs          - Interactive Swagger UI for API testing
+GET /redoc         - Clean ReDoc documentation interface  
+GET /openapi.json  - Machine-readable OpenAPI 3.0 specification
+```
+
+### 1.2 FastAPI Configuration
+
+```python
+from fastapi import FastAPI, Security
+from fastapi.security import HTTPBearer
+from fastapi.openapi.utils import get_openapi
+
+app = FastAPI(
+    title="AI-IMUTIS API",
+    description="""AI-Assisted Inter-Urban Mobility and Tourism Information System
+    
+    ## Features
+    * **Travel Management**: Search routes, book trips, track departures
+    * **Tourism Information**: Browse cities and attractions
+    * **AI Predictions**: Departure window estimation, traffic forecasting
+    * **Device Tracking**: Session management with IP tracking
+    * **Real-time Updates**: WebSocket support for live notifications
+    
+    ## Authentication
+    All protected endpoints require Firebase ID token in Authorization header:
+    ```
+    Authorization: Bearer <firebase-id-token>
+    ```
+    """,
+    version="1.0.0",
+    contact={
+        "name": "AI-IMUTIS Development Team",
+        "email": "dev@ai-imutis.com",
+        "url": "https://ai-imutis.com",
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://opensource.org/licenses/MIT",
+    },
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+)
+
+security = HTTPBearer()
+
+# Custom OpenAPI schema with security definitions
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    
+    # Add security schemes
+    openapi_schema["components"]["securitySchemes"] = {
+        "FirebaseAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Firebase ID Token obtained from Firebase Authentication",
+        },
+        "DeviceFingerprint": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Device-Fingerprint",
+            "description": "Unique device identifier for session tracking",
+        },
+    }
+    
+    # Add example responses
+    openapi_schema["components"]["responses"] = {
+        "UnauthorizedError": {
+            "description": "Authentication token missing or invalid",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "detail": {"type": "string", "example": "Invalid authentication credentials"},
+                        },
+                    },
+                },
+            },
+        },
+        "NotFoundError": {
+            "description": "Resource not found",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "detail": {"type": "string", "example": "Resource not found"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+    
+    # Add tags metadata
+    openapi_schema["tags"] = [
+        {"name": "Travel", "description": "Inter-urban travel route management"},
+        {"name": "Tourism", "description": "City and attraction information"},
+        {"name": "User", "description": "User profile and preferences"},
+        {"name": "Device", "description": "Device session and IP tracking"},
+        {"name": "Notifications", "description": "Push notifications and alerts"},
+        {"name": "AI", "description": "AI-powered predictions and recommendations"},
+    ]
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+```
+
+### 1.3 Example Endpoint Documentation
+
+```python
+from fastapi import APIRouter, Depends, Query, Path, HTTPException
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from datetime import datetime
+
+router = APIRouter(prefix="/api/travels", tags=["Travel"])
+
+class TripSearchRequest(BaseModel):
+    origin: str = Field(..., description="Origin city ID", example="douala")
+    destination: str = Field(..., description="Destination city ID", example="yaounde")
+    departure_date: datetime = Field(..., description="Desired departure date")
+    passengers: int = Field(1, ge=1, le=20, description="Number of passengers")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "origin": "douala",
+                "destination": "yaounde",
+                "departure_date": "2025-12-27T08:00:00Z",
+                "passengers": 2,
+            }
+        }
+
+class TripResponse(BaseModel):
+    id: str = Field(..., description="Unique trip identifier")
+    departure_time: datetime = Field(..., description="Scheduled departure time")
+    estimated_arrival: datetime = Field(..., description="Estimated arrival time")
+    available_seats: int = Field(..., description="Number of available seats")
+    price_per_seat: float = Field(..., description="Price per seat in XAF")
+    confidence: float = Field(..., ge=0, le=1, description="Departure prediction confidence")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "id": "trip-123",
+                "departure_time": "2025-12-27T08:30:00Z",
+                "estimated_arrival": "2025-12-27T12:00:00Z",
+                "available_seats": 15,
+                "price_per_seat": 5000.0,
+                "confidence": 0.87,
+            }
+        }
+
+@router.post(
+    "/search",
+    response_model=List[TripResponse],
+    summary="Search available trips",
+    description="Search for available inter-urban trips based on origin, destination, and date",
+    responses={
+        200: {"description": "List of available trips"},
+        400: {"description": "Invalid search parameters"},
+        401: {"$ref": "#/components/responses/UnauthorizedError"},
+    },
+    tags=["Travel"],
+)
+async def search_trips(
+    search: TripSearchRequest,
+    user: dict = Depends(verify_firebase_token),
+):
+    """Search for available trips with AI-powered departure predictions.
+    
+    This endpoint returns a list of available trips matching the search criteria,
+    including AI-generated departure window estimations with confidence scores.
+    
+    - **origin**: City ID for departure location
+    - **destination**: City ID for arrival location
+    - **departure_date**: Preferred departure date and time
+    - **passengers**: Number of passengers (1-20)
+    """
+    # Implementation
+    pass
+```
+
+---
+
+## 2. System Architecture Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

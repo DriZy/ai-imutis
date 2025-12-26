@@ -1078,6 +1078,11 @@ const styles = StyleSheet.create({
 
 ### API Base Configuration
 
+**API Documentation:**
+- Swagger UI: `https://api.ai-imutis.com/docs`
+- ReDoc: `https://api.ai-imutis.com/redoc`
+- OpenAPI Schema: `https://api.ai-imutis.com/openapi.json`
+
 ```typescript
 // services/api/config.ts
 import axios from 'axios';

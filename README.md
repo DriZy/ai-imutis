@@ -184,6 +184,44 @@ This project includes comprehensive documentation for implementing a sophisticat
 
 ---
 
+#### 6. **API_DOCUMENTATION_GUIDE.md** (Swagger/OpenAPI Reference)
+**Purpose:** Complete guide for API documentation using Swagger/OpenAPI  
+**Contents:**
+- Automatic API documentation with FastAPI
+- Swagger UI and ReDoc access (http://localhost:8000/docs, /redoc)
+- FastAPI configuration for OpenAPI
+- Documentation best practices
+- Endpoint documentation examples with full code
+- Pydantic model schemas
+- Security scheme configuration (Firebase Auth)
+- Response examples and error handling
+- Testing with Swagger UI
+- Exporting OpenAPI specification
+- Generating client SDKs (TypeScript, Python)
+
+**When to Use:**
+- Setting up API documentation
+- Learning Swagger/OpenAPI standards
+- Documenting new endpoints
+- Testing API endpoints interactively
+- Generating client libraries
+- Sharing API specification with frontend team
+- Onboarding new developers
+
+**Key Features:**
+- ✅ Auto-generated Swagger UI at /docs
+- ✅ ReDoc alternative interface at /redoc
+- ✅ OpenAPI 3.0 JSON specification at /openapi.json
+- ✅ Firebase authentication integration in Swagger
+- ✅ Interactive API testing in browser
+- ✅ Request/response schema validation
+- ✅ Code examples in multiple languages (curl, Python, JavaScript)
+- ✅ Automatic schema generation from Pydantic models
+- ✅ Custom security schemes and tags
+- ✅ Export to Postman/client SDK generators
+
+---
+
 ## 🎯 Quick Start Guide
 
 ### For Developers Starting the Project
