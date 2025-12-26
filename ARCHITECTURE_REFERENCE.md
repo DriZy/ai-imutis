@@ -2,7 +2,78 @@
 
 ---
 
-## 1. API Documentation (Swagger/OpenAPI)
+## Section 0: Security Architecture
+
+**Reference**: Complete implementation in [SECURITY_GUIDE.md](SECURITY_GUIDE.md)
+
+### Security Layers Overview
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                  CLIENT LAYER (Mobile App)                       │
+│  • Secure Storage (expo-secure-store)                           │
+│  • Certificate Pinning                                           │
+│  • Jailbreak/Root Detection                                      │
+│  • Biometric Authentication                                      │
+│  • Input Validation                                              │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │ HTTPS/TLS 1.3
+┌────────────────────────────┴─────────────────────────────────────┐
+│                  NETWORK LAYER (WAF/CDN)                         │
+│  • CloudFlare DDoS Protection                                    │
+│  • AWS WAF Rules (SQL injection, XSS)                           │
+│  • Rate Limiting (IP-based)                                      │
+│  • Geo-blocking                                                  │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │
+┌────────────────────────────┴─────────────────────────────────────┐
+│                APPLICATION LAYER (FastAPI)                       │
+│  • Firebase Token Verification                                   │
+│  • Multi-tier Rate Limiting (Redis)                             │
+│  • Adaptive Throttling                                           │
+│  • Input Sanitization (HTML, SQL, Path)                         │
+│  • Session Management (Device-bound)                             │
+│  • CORS (Whitelist origins)                                      │
+│  • Security Headers (HSTS, CSP, etc.)                           │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │ Parameterized Queries
+┌────────────────────────────┴─────────────────────────────────────┐
+│                 DATABASE LAYER (PostgreSQL)                      │
+│  • Row-Level Security (RLS)                                      │
+│  • Audit Logging                                                 │
+│  • Encryption at Rest                                            │
+│  • SSL/TLS Connections                                           │
+│  • Least Privilege Access                                        │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Rate Limiting Strategy
+
+| Tier | Requests/Min | Window | Endpoints |
+|------|--------------|--------|-----------|
+| Anonymous | 10 | 60s | All |
+| Authenticated | 100 | 60s | General |
+| Premium | 500 | 60s | General |
+| AI Endpoints | 20 | 60s | /ai/* |
+| Booking | 5 | 60s | /book* |
+
+### Critical Security Rules
+
+```python
+# DDoS Protection Triggers (Auto-block if):
+- More than 100 requests in 5 minutes
+- More than 10 requests per second
+- SQL injection patterns detected
+- XSS patterns detected
+- Path traversal attempts
+
+# Block duration: 60 minutes
+# Repeated violations: Permanent ban + SOC alert
+```
+
+---
+
+## Section 1: API Documentation (Swagger/OpenAPI)
 
 ### 1.1 Documentation Endpoints
 

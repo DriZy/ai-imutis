@@ -150,6 +150,14 @@ FastAPI provides superior performance for AI/ML-heavy workloads with native asyn
 - Comprehensive async error handling with intelligent retry logic for transient failures
 - Input sanitization for security (SQL injection prevention, XSS protection)
 - Firebase token verification middleware on protected endpoints
+- **Security Implementation (see SECURITY_GUIDE.md for complete details):**
+  - **Rate Limiting:** Multi-tier with Redis (10-500 req/min based on user tier)
+  - **Throttling:** Adaptive DDoS protection with IP blocking (>100 req/5min)
+  - **Input Validation:** Sanitize all inputs (HTML, SQL, path traversal)
+  - **SQL Injection Prevention:** Use parameterized queries only
+  - **Authentication:** Firebase token verification with device binding
+  - **Session Security:** Device-bound sessions with IP rotation detection
+  - **CORS:** Whitelist specific origins only
 - **Device IP tracking middleware:**
   - Capture client IP address from X-Forwarded-For header (proxy-aware)
   - Store device IP in device_sessions table for every request

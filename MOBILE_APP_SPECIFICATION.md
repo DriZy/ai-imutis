@@ -826,6 +826,319 @@ apiClient.interceptors.request.use(async (config) => {
 
 ---
 
+## Mobile Security Implementation
+
+**Reference**: Complete details in [SECURITY_GUIDE.md](SECURITY_GUIDE.md)
+
+### Security Overview
+
+The mobile application implements multiple layers of security:
+
+1. **Secure Storage**: Encrypted storage for tokens and credentials
+2. **Certificate Pinning**: Validate API server SSL certificates
+3. **Input Validation**: Client-side validation before API calls
+4. **Jailbreak Detection**: Detect and warn on compromised devices
+5. **Biometric Authentication**: Optional FaceID/TouchID for sensitive operations
+6. **Network Security**: Enforce HTTPS and reject invalid certificates
+
+### 1. Secure Storage Implementation
+
+```typescript
+// services/storage/secureStorage.ts
+import * as SecureStore from 'expo-secure-store';
+
+class SecureStorageService {
+  /**
+   * Store sensitive data in encrypted storage.
+   * Used for: Firebase tokens, user credentials, session data.
+   */
+  async setSecureItem(key: string, value: string): Promise<void> {
+    await SecureStore.setItemAsync(key, value);
+  }
+
+  async getSecureItem(key: string): Promise<string | null> {
+    return await SecureStore.getItemAsync(key);
+  }
+
+  async deleteSecureItem(key: string): Promise<void> {
+    await SecureStore.deleteItemAsync(key);
+  }
+}
+
+export const secureStorage = new SecureStorageService();
+
+// Usage
+await secureStorage.setSecureItem('firebase_token', token);
+await secureStorage.setSecureItem('user_session', sessionData);
+```
+
+### 2. Certificate Pinning
+
+```typescript
+// services/api/secureAPI.ts
+import axios from 'axios';
+
+class SecureAPIClient {
+  private client;
+
+  constructor() {
+    this.client = axios.create({
+      baseURL: 'https://api.ai-imutis.com',
+      timeout: 15000,
+      httpsAgent: {
+        rejectUnauthorized: true, // Reject self-signed certificates
+      },
+    });
+
+    this.setupInterceptors();
+  }
+
+  private setupInterceptors() {
+    this.client.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        // Detect potential MITM attacks
+        if (error.code === 'CERT_HAS_EXPIRED') {
+          console.error('SECURITY ALERT: SSL certificate expired');
+          throw new Error('Security validation failed');
+        }
+        
+        if (error.code === 'SELF_SIGNED_CERT_IN_CHAIN') {
+          console.error('SECURITY ALERT: Invalid certificate');
+          throw new Error('Security validation failed');
+        }
+        
+        throw error;
+      }
+    );
+  }
+}
+
+export const secureAPI = new SecureAPIClient();
+```
+
+### 3. Input Validation
+
+```typescript
+// utils/inputValidator.ts
+class MobileInputValidator {
+  /**
+   * Sanitize user input before sending to API.
+   */
+  static sanitizeString(input: string): string {
+    return input
+      .replace(/<[^>]*>/g, '') // Remove HTML tags
+      .replace(/[<>"']/g, '') // Remove dangerous chars
+      .trim();
+  }
+
+  static validateEmail(email: string): boolean {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  }
+
+  static validatePhone(phone: string): boolean {
+    const phoneRegex = /^\+[1-9]\d{1,14}$/;
+    return phoneRegex.test(phone);
+  }
+
+  static sanitizeSearchQuery(query: string): string {
+    return query
+      .replace(/['";/*]/g, '') // Remove SQL patterns
+      .trim()
+      .substring(0, 100); // Limit length
+  }
+}
+
+export default MobileInputValidator;
+```
+
+### 4. Jailbreak/Root Detection
+
+```typescript
+// security/deviceSecurity.ts
+import * as Device from 'expo-device';
+import { Platform } from 'react-native';
+
+class DeviceSecurityChecker {
+  async checkDeviceSecurity(): Promise<{
+    isSecure: boolean;
+    warnings: string[];
+  }> {
+    const warnings: string[] = [];
+
+    // Check if device is rooted/jailbroken
+    if (await this.isRooted()) {
+      warnings.push('Device security may be compromised');
+    }
+
+    // Check if running in emulator
+    if (Device.isDevice === false) {
+      warnings.push('Running on emulator');
+    }
+
+    return {
+      isSecure: warnings.length === 0,
+      warnings,
+    };
+  }
+
+  private async isRooted(): Promise<boolean> {
+    // Placeholder - use native module in production
+    // For Android: Check for su binary, SuperUser apps
+    // For iOS: Check for Cydia, jailbreak files
+    return false;
+  }
+
+  async enforceSecurityPolicy(): Promise<void> {
+    const check = await this.checkDeviceSecurity();
+    
+    if (!check.isSecure) {
+      console.warn('Security warnings:', check.warnings);
+      
+      // In production, restrict sensitive features
+      if (process.env.NODE_ENV === 'production') {
+        // Show warning to user
+        // Optionally restrict access to sensitive features
+      }
+    }
+  }
+}
+
+export const deviceSecurity = new DeviceSecurityChecker();
+```
+
+### 5. Biometric Authentication
+
+```typescript
+// services/auth/biometricAuth.ts
+import * as LocalAuthentication from 'expo-local-authentication';
+import { secureStorage } from '../storage/secureStorage';
+
+class BiometricAuthService {
+  async isBiometricSupported(): Promise<boolean> {
+    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+    return hasHardware && isEnrolled;
+  }
+
+  async authenticate(
+    reason: string = 'Verify your identity'
+  ): Promise<boolean> {
+    try {
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: reason,
+        cancelLabel: 'Cancel',
+        disableDeviceFallback: false,
+        requireConfirmation: true,
+      });
+
+      return result.success;
+    } catch (error) {
+      console.error('Biometric authentication error:', error);
+      return false;
+    }
+  }
+
+  async enableBiometricLogin(userId: string): Promise<void> {
+    const isSupported = await this.isBiometricSupported();
+    
+    if (!isSupported) {
+      throw new Error('Biometric authentication not available');
+    }
+
+    await secureStorage.setSecureItem(
+      `biometric_enabled_${userId}`,
+      'true'
+    );
+  }
+}
+
+export const biometricAuth = new BiometricAuthService();
+
+// Usage in login flow
+const canUseBiometric = await biometricAuth.isBiometricSupported();
+if (canUseBiometric) {
+  const authenticated = await biometricAuth.authenticate(
+    'Log in to AI-IMUTIS'
+  );
+  if (authenticated) {
+    // Proceed with login
+  }
+}
+```
+
+### Security Checklist for Mobile
+
+**Before Production Deployment:**
+
+- [ ] All sensitive data stored in SecureStore (never AsyncStorage)
+- [ ] Firebase tokens never logged or exposed
+- [ ] Certificate pinning enabled and tested
+- [ ] Self-signed certificates rejected
+- [ ] All user input validated and sanitized
+- [ ] Device security check runs on app launch
+- [ ] Biometric auth available for sensitive operations
+- [ ] Network requests over HTTPS only
+- [ ] No sensitive data in console logs (production build)
+- [ ] Code obfuscation enabled
+- [ ] API keys in environment variables
+- [ ] Request timeout configured (15 seconds)
+- [ ] Proper error handling (no stack traces to users)
+- [ ] Rate limiting respected (handle 429 responses)
+- [ ] Session expiration handled gracefully
+- [ ] Offline mode doesn't cache sensitive data
+
+### Security Best Practices
+
+```typescript
+// app.config.js - Security configuration
+export default {
+  expo: {
+    // ... other config
+    
+    // Disable developer menu in production
+    extra: {
+      eas: {
+        projectId: "your-project-id"
+      }
+    },
+    
+    // iOS specific security
+    ios: {
+      bundleIdentifier: "com.aiimutis.app",
+      buildNumber: "1.0.0",
+      infoPlist: {
+        NSAppTransportSecurity: {
+          // Require HTTPS
+          NSAllowsArbitraryLoads: false,
+        },
+        // Face ID usage description
+        NSFaceIDUsageDescription: "Use Face ID to securely log in"
+      }
+    },
+    
+    // Android specific security
+    android: {
+      package: "com.aiimutis.app",
+      versionCode: 1,
+      permissions: [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT"
+      ],
+      // Enable ProGuard for code obfuscation
+      enableProguardInReleaseBuilds: true,
+      // Disable ADB backup
+      allowBackup: false
+    }
+  }
+};
+```
+
+---
+
 ## Device IP Tracking
 
 ### Overview
