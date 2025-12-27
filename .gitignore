@@ -1,0 +1,45 @@
+# Global ignores
+.DS_Store
+.idea/
+.vscode/
+*.log
+logs/
+
+# Environment files
+.env
+.env.*
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+backend/.venv/
+
+# Node/JS (if present)
+node_modules/
+frontend/node_modules/
+
+# Build/Dist
+dist/
+build/
+*.egg-info/
+
+# Docker
+docker-compose.override.yml
+postgres_data/
+
+# OS/Editor
+Thumbs.db
+.Python
+
+# Alembic migrations should be tracked; do not ignore alembic/versions
