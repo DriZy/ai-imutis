@@ -2,7 +2,7 @@
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import AnyHttpUrl, BaseSettings
+from pydantic import BaseSettings, validator
 
 
 class Settings(BaseSettings):
@@ -18,15 +18,17 @@ class Settings(BaseSettings):
     redoc_url: str = "/redoc"
     openapi_url: str = "/openapi.json"
 
-    allowed_origins: List[AnyHttpUrl] = [
-        "http://localhost:3000",
-        "http://localhost:19006",
-        "https://ai-imutis.com",
-        "https://staging.ai-imutis.com",
-    ]
+    allowed_origins: str = "http://localhost:3000,http://localhost:19006"
 
     firebase_project_id: Optional[str] = None
     firebase_service_account_json: Optional[str] = None
+    
+    @validator("allowed_origins", pre=True)
+    def parse_allowed_origins(cls, v):
+        """Parse comma-separated origins or return as is."""
+        if isinstance(v, str):
+            return v
+        return v
 
     # Rate limiting tiers (requests per window)
     rate_limit_window_seconds: int = 60

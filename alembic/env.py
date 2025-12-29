@@ -6,6 +6,8 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine.url import make_url
+from sqlalchemy.exc import ArgumentError
 from dotenv import load_dotenv
 
 # Load .env if present
@@ -17,12 +19,22 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override sqlalchemy.url from environment
-section = config.get_section(config.config_ini_section)
+# Override sqlalchemy.url from environment  
 database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise RuntimeError("DATABASE_URL is not set")
-section["sqlalchemy.url"] = database_url
+
+# Trim quotes/whitespace that sometimes sneak in from .env parsing
+database_url = database_url.strip().strip("\"").strip("'")
+
+# Validate early so the error message is actionable
+try:
+    make_url(database_url)
+except ArgumentError as exc:
+    raise RuntimeError(f"Invalid DATABASE_URL value: {database_url}") from exc
+
+# Must set via config.set_main_option so Alembic properly expands it in the section dict
+config.set_main_option("sqlalchemy.url", database_url)
 
 # If you have MetaData from SQLAlchemy models, import here and set target_metadata.
 target_metadata = None

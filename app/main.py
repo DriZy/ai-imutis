@@ -28,7 +28,7 @@ app.add_middleware(RequestContextMiddleware)
 app.add_middleware(DeviceIPMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[str(o) for o in settings.allowed_origins],
+    allow_origins=[o.strip() for o in settings.allowed_origins.split(",")],
     allow_credentials=settings.cors_allow_credentials,
     allow_methods=settings.cors_allow_methods,
     allow_headers=settings.cors_allow_headers,
