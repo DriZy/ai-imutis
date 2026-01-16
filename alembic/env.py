@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from logging.config import fileConfig
 
 from alembic import context
@@ -9,6 +11,11 @@ from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import ArgumentError
 from dotenv import load_dotenv
+
+# Ensure project root on path for "app" imports when running Alembic directly
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from app.models import Base
 
 # Load .env if present
 load_dotenv()
@@ -36,8 +43,8 @@ except ArgumentError as exc:
 # Must set via config.set_main_option so Alembic properly expands it in the section dict
 config.set_main_option("sqlalchemy.url", database_url)
 
-# If you have MetaData from SQLAlchemy models, import here and set target_metadata.
-target_metadata = None
+# Use model metadata for autogenerate
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

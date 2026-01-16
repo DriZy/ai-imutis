@@ -39,3 +39,20 @@ class DeviceIPMiddleware(BaseHTTPMiddleware):
         if device_ip_header:
             response.headers["X-Device-IP"] = device_ip_header
         return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add basic security headers."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:  # type: ignore[override]
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-XSS-Protection", "0")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; frame-ancestors 'none'; object-src 'none'",
+        )
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+        return response

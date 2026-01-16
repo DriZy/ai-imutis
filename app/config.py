@@ -18,7 +18,14 @@ class Settings(BaseSettings):
     redoc_url: str = "/redoc"
     openapi_url: str = "/openapi.json"
 
+    # Runtime environment
+    environment: str = "development"
+
     allowed_origins: str = "http://localhost:3000,http://localhost:19006"
+
+    # Core services (fail fast if empty)
+    database_url: str = "postgresql://postgres:postgres@localhost:5432/ai_imutis"
+    redis_url: str = "redis://localhost:6379/0"
 
     firebase_project_id: Optional[str] = None
     firebase_service_account_json: Optional[str] = None
@@ -28,6 +35,14 @@ class Settings(BaseSettings):
         """Parse comma-separated origins or return as is."""
         if isinstance(v, str):
             return v
+        return v
+
+    @validator("database_url", "redis_url", pre=True)
+    def ensure_required(cls, v, field):
+        """Ensure required service URLs are provided."""
+
+        if v is None or (isinstance(v, str) and not v.strip()):
+            raise ValueError(f"{field.name.upper()} is required")
         return v
 
     # Rate limiting tiers (requests per window)

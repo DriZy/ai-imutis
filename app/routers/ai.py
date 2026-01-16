@@ -1,13 +1,17 @@
-"""AI-related endpoints (stubbed implementations)."""
+"""AI-related endpoints (data-backed heuristics)."""
 import asyncio
 from datetime import datetime, timedelta
 from random import random
 from typing import List
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
+from ..db import get_db
 from ..dependencies import AuthenticatedUser, get_current_user, get_rate_limit_identifier
+from ..models import Attraction, TravelRoute
 from ..rate_limit import rate_limiter
 from ..schemas.ai import (
     AttractionRecommendation,
@@ -41,30 +45,59 @@ async def _check_ai_rate(identifier: str) -> None:
 async def estimate_departure(
     payload: DepartureEstimationRequest,
     identifier: str = Depends(get_rate_limit_identifier),
+    db: AsyncSession = Depends(get_db),
 ) -> DepartureEstimationResponse:
-    """Predict optimal departure windows (demo values)."""
+    """Predict optimal departure windows using route schedule and duration."""
 
     await _check_ai_rate(identifier)
+    route = await db.get(TravelRoute, payload.route_id)
+    if not route:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route not found")
+
+    base_start = route.departure_time.replace(second=0, microsecond=0)
+    duration = route.duration_minutes or 0
+    buffer = 15 if duration and duration > 180 else 10
+
     windows = [
-        DepartureWindow(window="08:00-09:00", confidence=0.84, recommended=True),
-        DepartureWindow(window="11:00-12:00", confidence=0.71, recommended=False),
-        DepartureWindow(window="16:00-17:00", confidence=0.65, recommended=False),
+        DepartureWindow(
+            window=f"{(base_start - timedelta(minutes=buffer)).strftime('%H:%M')}-{(base_start + timedelta(minutes=15)).strftime('%H:%M')}",
+            confidence=0.82,
+            recommended=True,
+        ),
+        DepartureWindow(
+            window=f"{(base_start + timedelta(minutes=30)).strftime('%H:%M')}-{(base_start + timedelta(minutes=75)).strftime('%H:%M')}",
+            confidence=0.68,
+            recommended=False,
+        ),
     ]
-    return DepartureEstimationResponse(route_id=payload.route_id, windows=windows, notes="Demo inference")
+
+    note = "Based on schedule and duration heuristics"
+    return DepartureEstimationResponse(route_id=payload.route_id, windows=windows, notes=note)
 
 
 @router.get("/traffic-prediction/{route_id}", response_model=TrafficPredictionResponse)
 async def traffic_prediction(
     route_id: str,
     identifier: str = Depends(get_rate_limit_identifier),
+    db: AsyncSession = Depends(get_db),
 ) -> TrafficPredictionResponse:
-    """Return stubbed traffic prediction for a route."""
+    """Estimate congestion using distance/duration heuristics."""
 
     await _check_ai_rate(identifier)
+    route = await db.get(TravelRoute, route_id)
+    if not route:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route not found")
+
+    if route.distance_km and route.duration_minutes:
+        avg_speed = (route.distance_km / (route.duration_minutes / 60))
+    else:
+        avg_speed = 60.0
+    congestion_score = max(0.0, min(1.0, 1 - (avg_speed / 90)))
+
     return TrafficPredictionResponse(
         route_id=route_id,
-        congestion_score=0.35,
-        average_speed_kmh=64.5,
+        congestion_score=round(congestion_score, 2),
+        average_speed_kmh=round(avg_speed, 1),
         updated_at=datetime.utcnow(),
     )
 
@@ -73,26 +106,34 @@ async def traffic_prediction(
 async def recommend_attractions(
     payload: AttractionRecommendationRequest,
     identifier: str = Depends(get_rate_limit_identifier),
+    db: AsyncSession = Depends(get_db),
 ) -> AttractionRecommendationResponse:
-    """Return simple ranked recommendations based on provided interests."""
+    """Rank attractions in a city by interest overlap and rating."""
 
     await _check_ai_rate(identifier)
-    base = [
-        AttractionRecommendation(
-            attraction_id="douala-waterfront",
-            name="Douala Waterfront",
-            score=0.88,
-            reason="Matches interest: waterfront",
-        ),
-        AttractionRecommendation(
-            attraction_id="yaounde-mfoundi",
-            name="Mfoundi Market",
-            score=0.76,
-            reason="Cultural experience",
-        ),
-    ]
-    limited = base[: payload.max_results]
-    return AttractionRecommendationResponse(recommendations=limited)
+    interests = [s.lower() for s in (payload.interests or [])]
+
+    result = await db.execute(select(Attraction).where(Attraction.city_id == payload.city_id))
+    scored: List[AttractionRecommendation] = []
+    for item in result.scalars().all():
+        tags = [t.lower() for t in (item.tags or [])]
+        name_words = (item.name or "").lower().split()
+        cat = (item.category or "").lower()
+        overlap = len(set(interests) & (set(tags) | set(name_words) | {cat}))
+        base_score = item.rating or 3.5
+        score = min(0.99, 0.5 + 0.1 * overlap + 0.05 * (base_score - 3))
+        reason = "Matches interests" if overlap else "Top rated nearby"
+        scored.append(
+            AttractionRecommendation(
+                attraction_id=item.id,
+                name=item.name,
+                score=round(score, 2),
+                reason=reason,
+            )
+        )
+
+    scored.sort(key=lambda x: x.score, reverse=True)
+    return AttractionRecommendationResponse(recommendations=scored[: payload.max_results])
 
 
 @router.post("/tourist-guide/{attraction_id}", response_model=TouristGuideResponse)
@@ -100,13 +141,20 @@ async def tourist_guide(
     attraction_id: str,
     payload: TouristGuideRequest,
     identifier: str = Depends(get_rate_limit_identifier),
+    db: AsyncSession = Depends(get_db),
 ) -> TouristGuideResponse:
-    """Generate a brief guide for an attraction (demo text)."""
+    """Generate a brief guide using stored attraction metadata."""
 
     await _check_ai_rate(identifier)
+    attraction = await db.get(Attraction, attraction_id)
+    if not attraction:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attraction not found")
+
+    highlights = ", ".join((attraction.tags or [])[:3]) or "local highlights"
+    category = attraction.category or "spot"
     guide = (
-        f"Explore {attraction_id} with local insights, best visiting hours, and safety tips. "
-        f"Language: {payload.language}."
+        f"{attraction.name} is a {category} in {attraction.city_id}. Suggested visit: {attraction.opening_hours or 'daytime'}. "
+        f"Don't miss: {highlights}. Language: {payload.language}."
     )
     return TouristGuideResponse(
         attraction_id=attraction_id,
@@ -119,15 +167,20 @@ async def tourist_guide(
 async def tourism_suggestions(
     city_id: str,
     identifier: str = Depends(get_rate_limit_identifier),
+    db: AsyncSession = Depends(get_db),
 ) -> TourismSuggestionResponse:
-    """Return curated suggestions for a city."""
+    """Return curated suggestions derived from attractions."""
 
     await _check_ai_rate(identifier)
-    suggestions = [
-        "Start at the central market for breakfast",
-        "Visit key attractions before noon to avoid heat",
-        "Book inter-urban transfers a day in advance",
-    ]
+    result = await db.execute(select(Attraction).where(Attraction.city_id == city_id))
+    attractions = result.scalars().all()
+    if not attractions:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="City or attractions not found")
+
+    top = sorted(attractions, key=lambda a: a.rating or 0, reverse=True)[:3]
+    suggestions = [f"Visit {a.name} ({a.category or 'attraction'})" for a in top]
+    suggestions.append("Book inter-urban transfers a day in advance")
+    suggestions.append("Aim for morning visits to avoid heat and traffic")
     return TourismSuggestionResponse(city_id=city_id, suggestions=suggestions)
 
 
@@ -135,13 +188,22 @@ async def tourism_suggestions(
 async def analyze_travel_pattern(
     payload: TravelPatternRequest,
     identifier: str = Depends(get_rate_limit_identifier),
+    db: AsyncSession = Depends(get_db),
 ) -> TravelPatternResponse:
-    """Return synthetic travel pattern insights."""
+    """Provide heuristic travel pattern insights."""
 
     await _check_ai_rate(identifier)
+    route = await db.get(TravelRoute, payload.route_id)
+    if not route:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route not found")
+
+    duration = route.duration_minutes or 0
+    trend = "increasing" if duration > 180 else "stable"
+    confidence = 0.75 if trend == "increasing" else 0.6
+    commentary = "Higher demand on long-haul routes" if trend == "increasing" else "Short routes maintain steady demand"
+
     insights = [
-        TravelPatternInsight(trend="increasing", confidence=0.78, commentary="More riders on weekends"),
-        TravelPatternInsight(trend="stable", confidence=0.64, commentary="Weekday morning demand steady"),
+        TravelPatternInsight(trend=trend, confidence=confidence, commentary=commentary),
     ]
     return TravelPatternResponse(
         route_id=payload.route_id,

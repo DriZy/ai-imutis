@@ -2,11 +2,14 @@
 from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import data
 from ..config import get_settings
+from ..db import get_db
 from ..dependencies import AuthenticatedUser, get_current_user, get_rate_limit_identifier
+from ..models import Booking, TravelRoute, User
 from ..rate_limit import rate_limiter
 from ..schemas.travels import (
     DepartureWindow,
@@ -23,36 +26,70 @@ from ..schemas.travels import (
 router = APIRouter(prefix="/api/travels", tags=["Travel"])
 
 
+def _to_travel_summary(route: TravelRoute) -> TravelSummary:
+    return TravelSummary(
+        id=route.id,
+        origin=route.origin,
+        destination=route.destination,
+        departure_time=route.departure_time,
+        estimated_arrival=route.estimated_arrival,
+        available_seats=route.available_seats,
+        price_per_seat=float(route.price_per_seat),
+        confidence=route.confidence,
+    )
+
+
+def _to_travel_detail(route: TravelRoute) -> TravelDetail:
+    return TravelDetail(
+        **_to_travel_summary(route).dict(),
+        route_geometry=route.route_geometry,
+        distance_km=route.distance_km,
+        duration_minutes=route.duration_minutes,
+        amenities=route.amenities or [],
+    )
+
+
+async def _ensure_user_record(db: AsyncSession, user: AuthenticatedUser) -> None:
+    existing = await db.get(User, user.uid)
+    if existing:
+        return
+    db.add(User(uid=user.uid, email=user.email, role=user.role))
+    await db.commit()
+
+
 @router.get("", response_model=List[TravelSummary])
-async def list_travels() -> List[TravelSummary]:
+async def list_travels(db: AsyncSession = Depends(get_db)) -> List[TravelSummary]:
     """Return available travel routes."""
 
-    return [TravelSummary(**t) for t in data.travels]
+    result = await db.execute(select(TravelRoute))
+    routes = result.scalars().all()
+    return [_to_travel_summary(r) for r in routes]
 
 
 @router.post("/search", response_model=TravelSearchResponse)
-async def search_travels(payload: TravelSearchRequest) -> TravelSearchResponse:
+async def search_travels(
+    payload: TravelSearchRequest,
+    db: AsyncSession = Depends(get_db),
+) -> TravelSearchResponse:
     """Filter routes by origin/destination with simple matching."""
 
-    origin = payload.origin.lower()
-    destination = payload.destination.lower()
-    results = [
-        TravelSummary(**t)
-        for t in data.travels
-        if t["origin"].lower().startswith(origin)
-        and t["destination"].lower().startswith(destination)
-    ]
-    return TravelSearchResponse(results=results)
+    stmt = select(TravelRoute).where(
+        TravelRoute.origin.ilike(f"{payload.origin}%"),
+        TravelRoute.destination.ilike(f"{payload.destination}%"),
+    )
+    result = await db.execute(stmt)
+    routes = result.scalars().all()
+    return TravelSearchResponse(results=[_to_travel_summary(r) for r in routes])
 
 
 @router.get("/{route_id}", response_model=TravelDetail)
-async def get_travel(route_id: str) -> TravelDetail:
+async def get_travel(route_id: str, db: AsyncSession = Depends(get_db)) -> TravelDetail:
     """Return route details."""
 
-    for item in data.travels:
-        if item["id"] == route_id:
-            return TravelDetail(**item)
-    raise HTTPException(status_code=404, detail="Route not found")
+    route = await db.get(TravelRoute, route_id)
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return _to_travel_detail(route)
 
 
 @router.post("/estimate", response_model=TravelEstimateResponse)
@@ -82,6 +119,7 @@ async def book_travel(
     payload: TravelBookingRequest,
     user: AuthenticatedUser = Depends(get_current_user),
     identifier: str = Depends(get_rate_limit_identifier),
+    db: AsyncSession = Depends(get_db),
 ):
     """Simulate a booking and return confirmation."""
 
@@ -92,21 +130,41 @@ async def book_travel(
         window_seconds=settings.rate_limit_window_seconds,
     )
 
-    # Find travel record to reuse times
-    selected = next((t for t in data.travels if t["id"] == payload.route_id), None)
-    if not selected:
+    await _ensure_user_record(db, user)
+
+    result = await db.execute(
+        select(TravelRoute).where(TravelRoute.id == payload.route_id).with_for_update()
+    )
+    route = result.scalars().first()
+    if not route:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    departure_time: datetime = selected["departure_time"]
-    arrival_time: datetime = selected["estimated_arrival"]
+    if route.available_seats < payload.passengers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not enough seats available",
+        )
 
-    # Add minor offset to mimic processing
-    estimated_arrival = arrival_time + timedelta(minutes=5)
-    booking_id = f"bk-{payload.route_id}-{int(datetime.utcnow().timestamp())}"
+    route.available_seats -= payload.passengers
+    booking = Booking(
+        route_id=route.id,
+        user_id=user.uid,
+        passengers=payload.passengers,
+        payment_method=payload.payment_method,
+        special_requests=payload.special_requests,
+        status="confirmed",
+        departure_time=route.departure_time,
+        estimated_arrival=route.estimated_arrival + timedelta(minutes=5),
+    )
+
+    db.add(booking)
+    await db.commit()
+    await db.refresh(booking)
+    await db.refresh(route)
 
     return TravelBookingResponse(
-        booking_id=booking_id,
-        status="confirmed",
-        departure_time=departure_time,
-        estimated_arrival=estimated_arrival,
+        booking_id=booking.id,
+        status=booking.status,
+        departure_time=booking.departure_time,
+        estimated_arrival=booking.estimated_arrival,
     )

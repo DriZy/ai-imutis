@@ -1,44 +1,56 @@
-"""Simple in-memory rate limiting (suitable for local development)."""
-from collections import defaultdict, deque
-from datetime import datetime, timedelta
-from typing import Deque, Dict
-import asyncio
+"""Redis-backed rate limiting (async)."""
+from typing import Optional
 
+import redis.asyncio as redis
 from fastapi import HTTPException, status
 
+from .config import get_settings
 
-class RateLimiter:
-    """Lightweight sliding-window rate limiter.
 
-    For production, replace with a Redis-backed implementation to ensure accuracy
-    across multiple processes/replicas.
+class RedisRateLimiter:
+    """Sliding-window limiter using Redis INCR/EXPIRE.
+
+    Note: This allows a single request to slip past the strict limit when multiple
+    concurrent increments happen at the exact boundary. Acceptable for MVP.
     """
 
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._requests: Dict[str, Deque[datetime]] = defaultdict(deque)
+    def __init__(self, redis_url: str) -> None:
+        self.redis_url = redis_url
+        self._client: Optional[redis.Redis] = None
+
+    async def _get_client(self) -> redis.Redis:
+        if self._client is None:
+            self._client = redis.from_url(
+                self.redis_url,
+                encoding="utf-8",
+                decode_responses=True,
+                socket_timeout=2,
+            )
+        return self._client
 
     async def check(self, identifier: str, limit: int, window_seconds: int) -> None:
-        """Validate whether the identifier is within the allowed rate."""
+        """Increment request count and enforce limits."""
 
-        async with self._lock:
-            now = datetime.utcnow()
-            window_start = now - timedelta(seconds=window_seconds)
-            records = self._requests[identifier]
+        client = await self._get_client()
+        key = f"rl:{identifier}:{window_seconds}"
 
-            # Drop records outside of the window
-            while records and records[0] < window_start:
-                records.popleft()
+        count = await client.incr(key)
+        if count == 1:
+            await client.expire(key, window_seconds)
 
-            if len(records) >= limit:
-                retry_after = (records[0] + timedelta(seconds=window_seconds) - now).total_seconds()
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Rate limit exceeded. Try again later.",
-                    headers={"Retry-After": str(int(max(retry_after, 1)))},
-                )
+        if count > limit:
+            ttl = await client.ttl(key)
+            retry_after = max(int(ttl), 1) if ttl and ttl > 0 else window_seconds
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Try again later.",
+                headers={"Retry-After": str(retry_after)},
+            )
 
-            records.append(now)
+    async def close(self) -> None:
+        if self._client:
+            await self._client.close()
+            self._client = None
 
 
-rate_limiter = RateLimiter()
+rate_limiter = RedisRateLimiter(get_settings().redis_url)

@@ -3,10 +3,13 @@ from datetime import datetime
 from typing import Dict
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import data
+from ..db import get_db
 from ..dependencies import AuthenticatedUser, get_current_user
+from ..models import DeviceSession as DeviceSessionModel, User
 from ..schemas.common import MessageResponse
 from ..schemas.users import (
     DeviceSession,
@@ -21,14 +24,16 @@ from ..schemas.users import (
 
 router = APIRouter(prefix="/api", tags=["User"])
 
-# In-memory user profiles for demo
-_user_profiles: Dict[str, UserProfile] = {}
 
-
-def _get_or_create_profile(user: AuthenticatedUser) -> UserProfile:
-    if user.uid not in _user_profiles:
-        _user_profiles[user.uid] = UserProfile(uid=user.uid, email=user.email, role=user.role)
-    return _user_profiles[user.uid]
+async def _get_or_create_user(db: AsyncSession, user: AuthenticatedUser) -> User:
+    existing = await db.get(User, user.uid)
+    if existing:
+        return existing
+    new_user = User(uid=user.uid, email=user.email, role=user.role)
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
 
 
 @router.post("/auth/verify-token", response_model=VerifyTokenResponse)
@@ -39,32 +44,58 @@ async def verify_token(user: AuthenticatedUser = Depends(get_current_user)) -> V
 
 
 @router.get("/users/profile", response_model=UserProfile)
-async def get_profile(user: AuthenticatedUser = Depends(get_current_user)) -> UserProfile:
+async def get_profile(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserProfile:
     """Return user profile metadata."""
 
-    return _get_or_create_profile(user)
+    record = await _get_or_create_user(db, user)
+    return UserProfile(
+        uid=record.uid,
+        email=record.email,
+        role=record.role,
+        display_name=record.display_name,
+        language=record.language,
+        notification_enabled=record.notification_enabled,
+    )
 
 
 @router.put("/users/profile", response_model=UserProfile)
 async def update_profile(
     payload: UpdateUserProfileRequest,
     user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> UserProfile:
     """Update profile fields."""
 
-    profile = _get_or_create_profile(user)
+    record = await _get_or_create_user(db, user)
     update_data = payload.dict(exclude_unset=True)
-    updated = profile.copy(update=update_data)
-    _user_profiles[user.uid] = updated
-    return updated
+    for key, value in update_data.items():
+        setattr(record, key, value)
+    await db.commit()
+    await db.refresh(record)
+    return UserProfile(
+        uid=record.uid,
+        email=record.email,
+        role=record.role,
+        display_name=record.display_name,
+        language=record.language,
+        notification_enabled=record.notification_enabled,
+    )
 
 
 @router.delete("/users/account", response_model=MessageResponse)
-async def delete_account(user: AuthenticatedUser = Depends(get_current_user)) -> MessageResponse:
+async def delete_account(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
     """Delete user account (demo: mark as deleted)."""
 
-    if user.uid in _user_profiles:
-        del _user_profiles[user.uid]
+    record = await db.get(User, user.uid)
+    if record:
+        await db.delete(record)
+        await db.commit()
     return MessageResponse(message="Account deletion scheduled")
 
 
@@ -72,21 +103,42 @@ async def delete_account(user: AuthenticatedUser = Depends(get_current_user)) ->
 async def save_preferences(
     payload: UserPreferenceRequest,
     user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
-    """Persist user preferences (in-memory demo)."""
+    """Persist user preferences."""
 
-    profile = _get_or_create_profile(user)
+    record = await _get_or_create_user(db, user)
     update_data = payload.dict(exclude_unset=True)
-    updated = profile.copy(update=update_data)
-    _user_profiles[user.uid] = updated
+    for key, value in update_data.items():
+        setattr(record, key, value)
+    await db.commit()
     return MessageResponse(message="Preferences updated")
 
 
 @router.get("/users/sessions", response_model=DeviceSessionList)
-async def list_sessions(user: AuthenticatedUser = Depends(get_current_user)) -> DeviceSessionList:
+async def list_sessions(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DeviceSessionList:
     """Return active device sessions for the authenticated user."""
 
-    sessions = [DeviceSession(**s) for s in data.sessions]
+    await _get_or_create_user(db, user)
+    result = await db.execute(
+        select(DeviceSessionModel).where(DeviceSessionModel.user_id == user.uid)
+    )
+    sessions = [
+        DeviceSession(
+            session_id=s.id,
+            device_ip=s.device_ip,
+            device_type=s.device_type,
+            device_os=s.device_os,
+            session_start=s.session_start,
+            last_activity=s.last_activity,
+            is_active=s.is_active,
+            ip_rotation_detected=s.ip_rotation_detected,
+        )
+        for s in result.scalars().all()
+    ]
     return DeviceSessionList(sessions=sessions)
 
 
@@ -94,13 +146,16 @@ async def list_sessions(user: AuthenticatedUser = Depends(get_current_user)) -> 
 async def revoke_session(
     session_id: str,
     user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     """Revoke a session by id."""
 
-    before = len(data.sessions)
-    data.sessions[:] = [s for s in data.sessions if s["session_id"] != session_id]
-    if len(data.sessions) == before:
-        raise HTTPException(status_code=404, detail="Session not found")
+    await _get_or_create_user(db, user)
+    session = await db.get(DeviceSessionModel, session_id)
+    if not session or session.user_id != user.uid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    await db.delete(session)
+    await db.commit()
     return MessageResponse(message="Session revoked")
 
 
@@ -109,13 +164,27 @@ async def track_location(
     payload: LocationTrackRequest,
     request: Request,
     user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> LocationTrackResponse:
     """Record current location with device IP."""
 
     device_ip = getattr(request.state, "device_ip", request.client.host)
-    location_id = str(uuid.uuid4())
-    return LocationTrackResponse(
-        location_id=location_id,
+    await _get_or_create_user(db, user)
+
+    session_record = DeviceSessionModel(
+        user_id=user.uid,
         device_ip=device_ip,
-        recorded_at=datetime.utcnow(),
+        device_type=payload.activity_type,
+        device_os=None,
+        session_start=datetime.utcnow(),
+        last_activity=datetime.utcnow(),
+    )
+    db.add(session_record)
+    await db.commit()
+    await db.refresh(session_record)
+
+    return LocationTrackResponse(
+        location_id=session_record.id,
+        device_ip=device_ip,
+        recorded_at=session_record.session_start,
     )

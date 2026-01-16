@@ -7,7 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from .config import get_settings
-from .middleware import DeviceIPMiddleware, RequestContextMiddleware
+from .middleware import DeviceIPMiddleware, RequestContextMiddleware, SecurityHeadersMiddleware
+from .db import SessionLocal
+from .observability import init_sentry
+from .seed import seed_reference_data
 from .routers import ai, health, notifications, tourism, travels, users
 
 settings = get_settings()
@@ -26,6 +29,7 @@ app = FastAPI(
 # Middleware
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(DeviceIPMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.allowed_origins.split(",")],
@@ -93,12 +97,17 @@ def custom_openapi() -> dict:
     return app.openapi_schema
 
 
-    app.openapi = custom_openapi
+app.openapi = custom_openapi
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
     logger.info("Starting %s v%s", settings.app_name, settings.version)
+
+    init_sentry(settings.sentry_dsn, settings.environment, settings.version)
+
+    async with SessionLocal() as session:
+        await seed_reference_data(session)
 
 
 @app.on_event("shutdown")
