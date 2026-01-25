@@ -1,0 +1,40 @@
+apiVersion: v2
+name: ai-imutis
+description: A Helm chart for AI-IMUTIS backend (inter-urban travel + tourism)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+keywords:
+  - travel
+  - tourism
+  - fastapi
+  - postgres
+  - redis
+
+maintainers:
+  - name: AI-IMUTIS Team
+    email: team@example.com
+
+home: https://github.com/example/ai-imutis
+sources:
+  - https://github.com/example/ai-imutis
+
+dependencies:
+  - name: postgresql
+    version: "13.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+    alias: postgres
+    import-values:
+      - child: auth
+        parent: postgresAuth
+  - name: redis
+    version: "18.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+    alias: redis
+  - name: prometheus
+    version: "25.x.x"
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: prometheus.enabled

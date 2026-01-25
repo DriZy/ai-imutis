@@ -10,10 +10,13 @@ from .config import get_settings
 from .middleware import DeviceIPMiddleware, RequestContextMiddleware, SecurityHeadersMiddleware
 from .db import SessionLocal
 from .observability import init_sentry
+from .logging_config import setup_logging
+from .metrics import metrics_view
 from .seed import seed_reference_data
 from .routers import ai, health, notifications, tourism, travels, users
 
 settings = get_settings()
+setup_logging(settings.log_level)
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("ai-imutis")
 
@@ -52,6 +55,14 @@ async def root() -> Dict[str, str]:
     """Simple welcome endpoint."""
 
     return {"message": "AI-IMUTIS backend is running"}
+
+
+@app.get("/metrics", tags=["Observability"])
+async def metrics():
+    """Expose Prometheus metrics."""
+    from prometheus_client import CONTENT_TYPE_LATEST
+    from fastapi import Response
+    return Response(content=metrics_view(), media_type=CONTENT_TYPE_LATEST)
 
 
 def custom_openapi() -> dict:

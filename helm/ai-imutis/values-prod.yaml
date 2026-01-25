@@ -1,0 +1,137 @@
+# Production values override for Helm deployment
+# Usage: helm install ai-imutis ./helm/ai-imutis -f helm/ai-imutis/values-prod.yaml
+
+global:
+  environment: production
+  domain: api.imutis.io
+  imageRegistry: gcr.io
+  projectId: ai-imutis-prod
+  imagePullPolicy: IfNotPresent
+
+api:
+  replicaCount: 5
+  
+  image:
+    tag: "1.0.0-prod"
+  
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+  
+  env:
+    API_ENVIRONMENT: production
+    LOG_LEVEL: INFO
+    RATE_LIMIT_ANONYMOUS: "30"
+    RATE_LIMIT_AUTHENTICATED: "200"
+    RATE_LIMIT_PREMIUM: "1000"
+    RATE_LIMIT_AI: "2000"
+    RATE_LIMIT_BOOKING: "50"
+  
+  ingress:
+    hosts:
+      - host: api.imutis.io
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: api-imutis-tls
+        hosts:
+          - api.imutis.io
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 3
+
+postgres:
+  replicaCount: 3
+  
+  auth:
+    database: ai_imutis_prod
+  
+  primary:
+    resources:
+      limits:
+        cpu: 4000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+    
+    persistence:
+      size: 100Gi
+  
+  replica:
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+
+redis:
+  replicaCount: 1
+  
+  master:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    persistence:
+      size: 50Gi
+  
+  replica:
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+prometheus:
+  enabled: true
+  
+  prometheusSpec:
+    retention: 30d
+    
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: fast-ssd
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 100Gi
+
+config:
+  corsOrigins: "https://www.imutis.io,https://app.imutis.io,https://admin.imutis.io"
+  logLevel: INFO
+
+storage:
+  storageClass: fast-ssd
