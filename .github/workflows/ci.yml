@@ -1,20 +1,21 @@
+# yaml
 name: CI/CD
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, staging, develop ]
     tags:
       - 'v*.*.*'
   pull_request:
     branches: [ main, master ]
 
 env:
-  REGISTRY: gcr.io
   IMAGE_NAME: ai-imutis-api
-  KUBE_NAMESPACE: ai-imutis
+  DOCKER_REGISTRY: docker.io
+  KUBE_NAMESPACE_STAGING: staging
+  KUBE_NAMESPACE_PROD: production
 
 jobs:
-  # Syntax and compile checks
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -33,13 +34,15 @@ jobs:
       - name: Static import check
         run: |
           python -m compileall app
-      
+
       - name: Run ruff linter
         run: |
+          pip install ruff
           ruff check .
 
       - name: Check YAML files
         run: |
+          pip install yamllint || true
           for file in k8s/*.yaml helm/ai-imutis/values*.yaml; do
             echo "Validating $file"
             if command -v yamllint &> /dev/null; then
@@ -47,33 +50,25 @@ jobs:
             fi
           done
 
-  # Docker build and push
   docker:
     needs: lint
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
         with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for GCR
-        run: |
-          gcloud auth configure-docker
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -81,10 +76,11 @@ jobs:
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG=${GITHUB_REF#refs/tags/}
           else
-            TAG=${{ github.sha }}
+            TAG=${GITHUB_SHA::8}
           fi
+          IMAGE="${{ env.DOCKER_REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}"
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "image=${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -99,110 +95,68 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
 
-  # Kubernetes deployment (only on main branch)
-  deploy:
+  deploy-staging:
     needs: docker
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/heads/staging') || startsWith(github.ref, 'refs/heads/develop')
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    
     steps:
       - uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Get GKE credentials
-        run: |
-          gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} \
-            --region=${{ secrets.GKE_REGION }} \
-            --project=${{ secrets.GCP_PROJECT_ID }}
-
-      - name: Install Helm
-        uses: azure/setup-helm@v3
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
         with:
           version: 'latest'
 
-      - name: Extract metadata
-        id: meta
-        run: |
-          echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "image=${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
+      - name: Install doctl and authenticate
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_TOKEN }}
 
-      - name: Run database migrations
+      - name: Configure kubeconfig (staging)
         run: |
-          kubectl set image deployment/api \
-            api=${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }} \
-            -n ${{ env.KUBE_NAMESPACE }} \
-            --record
-          kubectl wait --for=condition=progressing deployment/api \
-            -n ${{ env.KUBE_NAMESPACE }} \
-            --timeout=600s || true
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DO_K8S_CLUSTER_STAGING }}
 
-      - name: Deploy via Helm
+      - name: Update staging deployment image
         run: |
-          helm upgrade --install ai-imutis ./helm/ai-imutis \
-            --namespace ${{ env.KUBE_NAMESPACE }} \
-            --set api.image.tag=${{ steps.meta.outputs.tag }} \
-            --set global.projectId=${{ secrets.GCP_PROJECT_ID }} \
-            --timeout 10m \
-            --wait
+          IMAGE="${{ needs.docker.outputs.image }}:${{ needs.docker.outputs.tag }}"
+          kubectl set image deployment/api api=$IMAGE -n ${{ env.KUBE_NAMESPACE_STAGING }} --record
+          kubectl rollout status deployment/api -n ${{ env.KUBE_NAMESPACE_STAGING }} --timeout=600s
 
-      - name: Verify deployment
+      - name: Tail staging pod logs (last 100 lines)
         run: |
-          kubectl rollout status deployment/api \
-            -n ${{ env.KUBE_NAMESPACE }} \
-            --timeout=600s
+          kubectl get pods -n ${{ env.KUBE_NAMESPACE_STAGING }} -l app=api -o name | head -n1 | xargs -I{} kubectl logs {} -n ${{ env.KUBE_NAMESPACE_STAGING }} --tail=100 || true
 
-      - name: Check pod health
-        run: |
-          kubectl get pods -n ${{ env.KUBE_NAMESPACE }} -l app=api
-          kubectl logs -n ${{ env.KUBE_NAMESPACE }} \
-            -l app=api \
-            --tail=50
-
-  # Load testing (optional, triggered on release tags)
-  load-test:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: deploy
+  deploy-production:
+    needs: docker
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
         with:
-          python-version: '3.11'
+          version: 'latest'
 
-      - name: Install Locust
+      - name: Install doctl and authenticate
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_TOKEN }}
+
+      - name: Configure kubeconfig (production)
         run: |
-          pip install locust
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DO_K8S_CLUSTER_PROD }}
 
-      - name: Get API endpoint
-        id: api
+      - name: Update production deployment image
         run: |
-          API_URL=$(kubectl get ingress -n ${{ env.KUBE_NAMESPACE }} \
-            -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
-          echo "url=http://${API_URL}" >> $GITHUB_OUTPUT
+          IMAGE="${{ needs.docker.outputs.image }}:${{ needs.docker.outputs.tag }}"
+          kubectl set image deployment/api api=$IMAGE -n ${{ env.KUBE_NAMESPACE_PROD }} --record
+          kubectl rollout status deployment/api -n ${{ env.KUBE_NAMESPACE_PROD }} --timeout=600s
 
-      - name: Run load test
+      - name: Tail production pod logs (last 100 lines)
         run: |
-          locust -f locustfile.py \
-            --host=${{ steps.api.outputs.url }} \
-            --users=100 \
-            --spawn-rate=10 \
-            --run-time=5m \
-            --headless
+          kubectl get pods -n ${{ env.KUBE_NAMESPACE_PROD }} -l app=api -o name | head -n1 | xargs -I{} kubectl logs {} -n ${{ env.KUBE_NAMESPACE_PROD }} --tail=100 || true
 
-  # Notify on failure
   notify:
     if: failure()
     runs-on: ubuntu-latest

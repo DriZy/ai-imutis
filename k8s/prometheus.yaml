@@ -1,326 +1,326 @@
-apiVersion: v1
-kind: Service
-metadata:
-  name: prometheus
-  namespace: ai-imutis
-  labels:
-    app: prometheus
-spec:
-  type: ClusterIP
-  selector:
-    app: prometheus
-  ports:
-  - name: http
-    port: 9090
-    targetPort: 9090
-    protocol: TCP
-
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: prometheus-config
-  namespace: ai-imutis
-data:
-  prometheus.yml: |
-    global:
-      scrape_interval: 15s
-      evaluation_interval: 15s
-      external_labels:
-        cluster: ai-imutis
-        environment: production
-    
-    alerting:
-      alertmanagers:
-      - static_configs:
-        - targets:
-          - alertmanager:9093
-    
-    rule_files:
-    - "/etc/prometheus/rules/*.yml"
-    
-    scrape_configs:
-    - job_name: 'kubernetes-apiservers'
-      kubernetes_sd_configs:
-      - role: endpoints
-      scheme: https
-      tls_config:
-        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-      relabel_configs:
-      - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
-        action: keep
-        regex: default;kubernetes;https
-    
-    - job_name: 'kubernetes-nodes'
-      kubernetes_sd_configs:
-      - role: node
-      scheme: https
-      tls_config:
-        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-      relabel_configs:
-      - action: labelmap
-        regex: __meta_kubernetes_node_label_(.+)
-    
-    - job_name: 'kubernetes-pods'
-      kubernetes_sd_configs:
-      - role: pod
-      relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-        action: keep
-        regex: "true"
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-        action: replace
-        target_label: __metrics_path__
-        regex: (.+)
-      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
-        action: replace
-        regex: ([^:]+)(?::\d+)?;(\d+)
-        replacement: $1:$2
-        target_label: __address__
-      - action: labelmap
-        regex: __meta_kubernetes_pod_label_(.+)
-      - source_labels: [__meta_kubernetes_namespace]
-        action: replace
-        target_label: kubernetes_namespace
-      - source_labels: [__meta_kubernetes_pod_name]
-        action: replace
-        target_label: kubernetes_pod_name
-    
-    - job_name: 'ai-imutis-api'
-      kubernetes_sd_configs:
-      - role: pod
-        namespaces:
-          names:
-          - ai-imutis
-      relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_label_app]
-        action: keep
-        regex: api
-      - source_labels: [__meta_kubernetes_pod_container_port_number]
-        action: keep
-        regex: "8000"
-      - source_labels: [__address__]
-        action: replace
-        regex: ([^:]+)(?::\d+)?
-        replacement: $1:8000
-        target_label: __address__
-      - source_labels: [__meta_kubernetes_pod_name]
-        action: replace
-        target_label: pod
-      - source_labels: [__meta_kubernetes_namespace]
-        action: replace
-        target_label: namespace
-
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: prometheus-rules
-  namespace: ai-imutis
-data:
-  api-rules.yml: |
-    groups:
-    - name: api-alerts
-      interval: 30s
-      rules:
-      - alert: APIHighErrorRate
-        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "API high error rate (>5%)"
-          description: "{{ $labels.instance }} has error rate {{ $value }}"
-      
-      - alert: APIHighLatency
-        expr: histogram_quantile(0.95, http_request_duration_seconds_bucket) > 1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "API high latency (p95 > 1s)"
-          description: "{{ $labels.instance }} has p95 latency {{ $value }}s"
-      
-      - alert: DatabaseConnectionPoolExhausted
-        expr: db_connection_pool_size >= 18
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Database connection pool near limit"
-          description: "{{ $labels.instance }} using {{ $value }} connections"
-      
-      - alert: RateLimitRejections
-        expr: rate(rate_limit_rejections_total[5m]) > 10
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High rate limit rejections"
-          description: "{{ $labels.identifier }} rejected {{ $value }} times/sec"
-      
-      - alert: BookingFailureRate
-        expr: rate(bookings_total{status="failed"}[5m]) > 0.1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High booking failure rate"
-          description: "Booking failure rate: {{ $value }}/sec"
-      
-      - alert: AuthFailureRate
-        expr: rate(auth_failures_total[5m]) > 1
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High authentication failure rate"
-          description: "Auth failures: {{ $value }}/sec"
-      
-      - alert: WebSocketConnectionDrop
-        expr: rate(websocket_connections[5m]) < -5
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "WebSocket connections dropping"
-          description: "Drop rate: {{ $value }}/sec"
-
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: prometheus
-  namespace: ai-imutis
-  labels:
-    app: prometheus
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: prometheus
-  template:
-    metadata:
-      labels:
-        app: prometheus
-    spec:
-      serviceAccountName: prometheus-sa
-      securityContext:
-        fsGroup: 65534
-        runAsNonRoot: true
-        runAsUser: 65534
-      
-      containers:
-      - name: prometheus
-        image: prom/prometheus:latest
-        imagePullPolicy: IfNotPresent
-        
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-              - ALL
-          readOnlyRootFilesystem: true
-        
-        args:
-        - '--config.file=/etc/prometheus/prometheus.yml'
-        - '--storage.tsdb.path=/prometheus'
-        - '--storage.tsdb.retention.time=15d'
-        - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-        - '--web.console.templates=/usr/share/prometheus/consoles'
-        - '--web.enable-lifecycle'
-        
-        ports:
-        - name: web
-          containerPort: 9090
-          protocol: TCP
-        
-        resources:
-          requests:
-            cpu: "250m"
-            memory: "512Mi"
-          limits:
-            cpu: "1000m"
-            memory: "2Gi"
-        
-        livenessProbe:
-          httpGet:
-            path: /-/healthy
-            port: 9090
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-        
-        readinessProbe:
-          httpGet:
-            path: /-/ready
-            port: 9090
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
-        
-        volumeMounts:
-        - name: prometheus-config
-          mountPath: /etc/prometheus
-          readOnly: true
-        - name: prometheus-rules
-          mountPath: /etc/prometheus/rules
-          readOnly: true
-        - name: prometheus-storage
-          mountPath: /prometheus
-      
-      volumes:
-      - name: prometheus-config
-        configMap:
-          name: prometheus-config
-      - name: prometheus-rules
-        configMap:
-          name: prometheus-rules
-      - name: prometheus-storage
-        emptyDir: {}
-
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: prometheus-sa
-  namespace: ai-imutis
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: prometheus
-rules:
-- apiGroups: [""]
-  resources:
-  - nodes
-  - nodes/proxy
-  - services
-  - endpoints
-  - pods
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["extensions"]
-  resources:
-  - ingresses
-  verbs: ["get", "list", "watch"]
-- nonResourceURLs: ["/metrics"]
-  verbs: ["get"]
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: prometheus
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: prometheus
-subjects:
-- kind: ServiceAccount
-  name: prometheus-sa
-  namespace: ai-imutis
+#apiVersion: v1
+#kind: Service
+#metadata:
+#  name: prometheus
+#  namespace: ai-imutis
+#  labels:
+#    app: prometheus
+#spec:
+#  type: ClusterIP
+#  selector:
+#    app: prometheus
+#  ports:
+#  - name: http
+#    port: 9090
+#    targetPort: 9090
+#    protocol: TCP
+#
+#---
+#apiVersion: v1
+#kind: ConfigMap
+#metadata:
+#  name: prometheus-config
+#  namespace: ai-imutis
+#data:
+#  prometheus.yml: |
+#    global:
+#      scrape_interval: 15s
+#      evaluation_interval: 15s
+#      external_labels:
+#        cluster: ai-imutis
+#        environment: production
+#
+#    alerting:
+#      alertmanagers:
+#      - static_configs:
+#        - targets:
+#          - alertmanager:9093
+#
+#    rule_files:
+#    - "/etc/prometheus/rules/*.yml"
+#
+#    scrape_configs:
+#    - job_name: 'kubernetes-apiservers'
+#      kubernetes_sd_configs:
+#      - role: endpoints
+#      scheme: https
+#      tls_config:
+#        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+#      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+#      relabel_configs:
+#      - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+#        action: keep
+#        regex: default;kubernetes;https
+#
+#    - job_name: 'kubernetes-nodes'
+#      kubernetes_sd_configs:
+#      - role: node
+#      scheme: https
+#      tls_config:
+#        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+#      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+#      relabel_configs:
+#      - action: labelmap
+#        regex: __meta_kubernetes_node_label_(.+)
+#
+#    - job_name: 'kubernetes-pods'
+#      kubernetes_sd_configs:
+#      - role: pod
+#      relabel_configs:
+#      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+#        action: keep
+#        regex: "true"
+#      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+#        action: replace
+#        target_label: __metrics_path__
+#        regex: (.+)
+#      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+#        action: replace
+#        regex: ([^:]+)(?::\d+)?;(\d+)
+#        replacement: $1:$2
+#        target_label: __address__
+#      - action: labelmap
+#        regex: __meta_kubernetes_pod_label_(.+)
+#      - source_labels: [__meta_kubernetes_namespace]
+#        action: replace
+#        target_label: kubernetes_namespace
+#      - source_labels: [__meta_kubernetes_pod_name]
+#        action: replace
+#        target_label: kubernetes_pod_name
+#
+#    - job_name: 'ai-imutis-api'
+#      kubernetes_sd_configs:
+#      - role: pod
+#        namespaces:
+#          names:
+#          - ai-imutis
+#      relabel_configs:
+#      - source_labels: [__meta_kubernetes_pod_label_app]
+#        action: keep
+#        regex: api
+#      - source_labels: [__meta_kubernetes_pod_container_port_number]
+#        action: keep
+#        regex: "8000"
+#      - source_labels: [__address__]
+#        action: replace
+#        regex: ([^:]+)(?::\d+)?
+#        replacement: $1:8000
+#        target_label: __address__
+#      - source_labels: [__meta_kubernetes_pod_name]
+#        action: replace
+#        target_label: pod
+#      - source_labels: [__meta_kubernetes_namespace]
+#        action: replace
+#        target_label: namespace
+#
+#---
+#apiVersion: v1
+#kind: ConfigMap
+#metadata:
+#  name: prometheus-rules
+#  namespace: ai-imutis
+#data:
+#  api-rules.yml: |
+#    groups:
+#    - name: api-alerts
+#      interval: 30s
+#      rules:
+#      - alert: APIHighErrorRate
+#        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+#        for: 5m
+#        labels:
+#          severity: critical
+#        annotations:
+#          summary: "API high error rate (>5%)"
+#          description: "{{ $labels.instance }} has error rate {{ $value }}"
+#
+#      - alert: APIHighLatency
+#        expr: histogram_quantile(0.95, http_request_duration_seconds_bucket) > 1
+#        for: 5m
+#        labels:
+#          severity: warning
+#        annotations:
+#          summary: "API high latency (p95 > 1s)"
+#          description: "{{ $labels.instance }} has p95 latency {{ $value }}s"
+#
+#      - alert: DatabaseConnectionPoolExhausted
+#        expr: db_connection_pool_size >= 18
+#        for: 2m
+#        labels:
+#          severity: warning
+#        annotations:
+#          summary: "Database connection pool near limit"
+#          description: "{{ $labels.instance }} using {{ $value }} connections"
+#
+#      - alert: RateLimitRejections
+#        expr: rate(rate_limit_rejections_total[5m]) > 10
+#        for: 5m
+#        labels:
+#          severity: warning
+#        annotations:
+#          summary: "High rate limit rejections"
+#          description: "{{ $labels.identifier }} rejected {{ $value }} times/sec"
+#
+#      - alert: BookingFailureRate
+#        expr: rate(bookings_total{status="failed"}[5m]) > 0.1
+#        for: 5m
+#        labels:
+#          severity: warning
+#        annotations:
+#          summary: "High booking failure rate"
+#          description: "Booking failure rate: {{ $value }}/sec"
+#
+#      - alert: AuthFailureRate
+#        expr: rate(auth_failures_total[5m]) > 1
+#        for: 2m
+#        labels:
+#          severity: warning
+#        annotations:
+#          summary: "High authentication failure rate"
+#          description: "Auth failures: {{ $value }}/sec"
+#
+#      - alert: WebSocketConnectionDrop
+#        expr: rate(websocket_connections[5m]) < -5
+#        for: 2m
+#        labels:
+#          severity: warning
+#        annotations:
+#          summary: "WebSocket connections dropping"
+#          description: "Drop rate: {{ $value }}/sec"
+#
+#---
+#apiVersion: apps/v1
+#kind: Deployment
+#metadata:
+#  name: prometheus
+#  namespace: ai-imutis
+#  labels:
+#    app: prometheus
+#spec:
+#  replicas: 1
+#  selector:
+#    matchLabels:
+#      app: prometheus
+#  template:
+#    metadata:
+#      labels:
+#        app: prometheus
+#    spec:
+#      serviceAccountName: prometheus-sa
+#      securityContext:
+#        fsGroup: 65534
+#        runAsNonRoot: true
+#        runAsUser: 65534
+#
+#      containers:
+#      - name: prometheus
+#        image: prom/prometheus:latest
+#        imagePullPolicy: IfNotPresent
+#
+#        securityContext:
+#          allowPrivilegeEscalation: false
+#          capabilities:
+#            drop:
+#              - ALL
+#          readOnlyRootFilesystem: true
+#
+#        args:
+#        - '--config.file=/etc/prometheus/prometheus.yml'
+#        - '--storage.tsdb.path=/prometheus'
+#        - '--storage.tsdb.retention.time=15d'
+#        - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+#        - '--web.console.templates=/usr/share/prometheus/consoles'
+#        - '--web.enable-lifecycle'
+#
+#        ports:
+#        - name: web
+#          containerPort: 9090
+#          protocol: TCP
+#
+#        resources:
+#          requests:
+#            cpu: "250m"
+#            memory: "512Mi"
+#          limits:
+#            cpu: "1000m"
+#            memory: "2Gi"
+#
+#        livenessProbe:
+#          httpGet:
+#            path: /-/healthy
+#            port: 9090
+#          initialDelaySeconds: 30
+#          periodSeconds: 10
+#          timeoutSeconds: 5
+#          failureThreshold: 3
+#
+#        readinessProbe:
+#          httpGet:
+#            path: /-/ready
+#            port: 9090
+#          initialDelaySeconds: 10
+#          periodSeconds: 5
+#          timeoutSeconds: 3
+#          failureThreshold: 3
+#
+#        volumeMounts:
+#        - name: prometheus-config
+#          mountPath: /etc/prometheus
+#          readOnly: true
+#        - name: prometheus-rules
+#          mountPath: /etc/prometheus/rules
+#          readOnly: true
+#        - name: prometheus-storage
+#          mountPath: /prometheus
+#
+#      volumes:
+#      - name: prometheus-config
+#        configMap:
+#          name: prometheus-config
+#      - name: prometheus-rules
+#        configMap:
+#          name: prometheus-rules
+#      - name: prometheus-storage
+#        emptyDir: {}
+#
+#---
+#apiVersion: v1
+#kind: ServiceAccount
+#metadata:
+#  name: prometheus-sa
+#  namespace: ai-imutis
+#
+#---
+#apiVersion: rbac.authorization.k8s.io/v1
+#kind: ClusterRole
+#metadata:
+#  name: prometheus
+#rules:
+#- apiGroups: [""]
+#  resources:
+#  - nodes
+#  - nodes/proxy
+#  - services
+#  - endpoints
+#  - pods
+#  verbs: ["get", "list", "watch"]
+#- apiGroups: ["extensions"]
+#  resources:
+#  - ingresses
+#  verbs: ["get", "list", "watch"]
+#- nonResourceURLs: ["/metrics"]
+#  verbs: ["get"]
+#
+#---
+#apiVersion: rbac.authorization.k8s.io/v1
+#kind: ClusterRoleBinding
+#metadata:
+#  name: prometheus
+#roleRef:
+#  apiGroup: rbac.authorization.k8s.io
+#  kind: ClusterRole
+#  name: prometheus
+#subjects:
+#- kind: ServiceAccount
+#  name: prometheus-sa
+#  namespace: ai-imutis
