@@ -1,7 +1,5 @@
 """User management and device/session tracking endpoints."""
 from datetime import datetime
-from typing import Dict
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select

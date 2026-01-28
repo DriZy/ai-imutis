@@ -1,5 +1,4 @@
 """Seed reference data from in-memory fixtures into the database."""
-from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

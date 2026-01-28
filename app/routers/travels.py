@@ -1,5 +1,5 @@
 """Travel endpoints for inter-urban mobility."""
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status

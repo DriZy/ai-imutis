@@ -1,7 +1,6 @@
 """Notification endpoints and WebSocket stream."""
 import asyncio
 from datetime import datetime
-from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select

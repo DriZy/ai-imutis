@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..db import get_db
-from ..dependencies import AuthenticatedUser, get_current_user, get_rate_limit_identifier
+from ..dependencies import get_rate_limit_identifier
 from ..models import Attraction, TravelRoute
 from ..rate_limit import rate_limiter
 from ..schemas.ai import (
