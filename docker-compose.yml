@@ -7,8 +7,13 @@ services:
     container_name: ai-imutis-db
     env_file:
       - .env
+    # Fixed: Aligned with env_file, not inside it
+    environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -21,10 +26,11 @@ services:
       dockerfile: Dockerfile
     platform: linux/arm64/v8
     container_name: ai-imutis-backend
-    env_file:
-      - .env
     ports:
       - "8000:8000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: ${DATABASE_URL}
     volumes:
       - .:/app
     depends_on:

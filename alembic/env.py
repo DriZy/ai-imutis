@@ -27,7 +27,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Override sqlalchemy.url from environment  
-database_url = os.getenv("DATABASE_URL")
+database_url = "postgresql://postgres:postgres@db:5432/ai_imutis"
 if not database_url:
     raise RuntimeError("DATABASE_URL is not set")
 
@@ -61,6 +61,9 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    # Get the URL from the config which was set from DATABASE_URL env var
+    alembic_url = config.get_main_option("sqlalchemy.url")
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section),
         prefix="sqlalchemy.",

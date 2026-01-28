@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:3000,http://localhost:19006"
 
     # Core services (fail fast if empty)
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/ai_imutis"
+    database_url: str = "postgresql://postgres:postgres@db:5432/ai_imutis"
     redis_url: str = "redis://localhost:6379/0"
 
     firebase_project_id: Optional[str] = None

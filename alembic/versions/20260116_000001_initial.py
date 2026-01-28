@@ -131,4 +131,3 @@ def downgrade() -> None:
     op.drop_table("travel_routes")
     op.drop_table("cities")
     op.drop_table("users")
-*** End Patch

@@ -6,6 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from .config import get_settings
 
 
+import logging
+
+# ... existing imports ...
+
+logger = logging.getLogger(__name__)
+
 def _build_async_url(raw_url: str) -> str:
     url = make_url(raw_url)
     if url.drivername in {"postgres", "postgresql"}:
@@ -15,8 +21,10 @@ def _build_async_url(raw_url: str) -> str:
 
 _settings = get_settings()
 ASYNC_DATABASE_URL = _build_async_url(_settings.database_url)
+logger.info("Resolved ASYNC_DATABASE_URL: %s", ASYNC_DATABASE_URL)
 engine: AsyncEngine = create_async_engine(ASYNC_DATABASE_URL, echo=False, future=True)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
 
 
 async def get_db():
