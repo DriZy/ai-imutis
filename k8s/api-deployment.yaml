@@ -95,8 +95,7 @@ spec:
       terminationGracePeriodSeconds: 30
       
       initContainers:
-      - name: migrations
-        image: gcr.io/PROJECT_ID/ai-imutis-api:latest
+image: gcr.io/your-gcp-project/ai-imutis-api:1.0.0
         imagePullPolicy: Always
         
         securityContext:
@@ -150,7 +149,7 @@ spec:
       
       containers:
       - name: api
-        image: gcr.io/PROJECT_ID/ai-imutis-api:latest
+        image: gcr.io/your-gcp-project/ai-imutis-api:1.0.0
         imagePullPolicy: Always
         
         securityContext:
