@@ -37,6 +37,7 @@ build/
 # Docker
 docker-compose.override.yml
 postgres_data/
+docker-compose.prod.yml
 
 # OS/Editor
 Thumbs.db
