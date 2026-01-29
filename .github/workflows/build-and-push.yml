@@ -115,8 +115,8 @@ jobs:
     if: startsWith(github.ref, 'refs/heads/staging') || startsWith(github.ref, 'refs/heads/develop')
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to staging host via SSH (docker compose)
-        uses: appleboy/ssh-action@v0.1.7
+      - name: Deploy to staging host via SSH (Docker Compose)
+        uses: appleboy/ssh-action@v0.1.10
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
