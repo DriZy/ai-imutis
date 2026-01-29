@@ -124,7 +124,7 @@ jobs:
           passphrase: ${{ secrets.SSH_PASSPHRASE }}
           script: |
             cd /srv/apps/ai_imutis
-            docker compose pull || true
+            docker compose pull
             docker compose up -d --remove-orphans
 
   deploy-production:
