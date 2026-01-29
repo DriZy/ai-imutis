@@ -124,10 +124,7 @@ jobs:
           passphrase: ${{ secrets.SSH_PASSPHRASE }}
           script: |
             cd /srv/apps/ai_imutis
-            set -euo pipefail
-            BACKEND_IMAGE=${{ needs.build-and-push.outputs.backend_image }}
-            DB_IMAGE=${{ needs.build-and-push.outputs.db_image }}
-            printf "%s" "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+#            printf "%s" "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
             docker compose pull || true
             docker compose up -d --remove-orphans
 
