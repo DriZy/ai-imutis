@@ -141,10 +141,10 @@ jobs:
       - name: Deploy to production host via SSH (docker compose)
         uses: appleboy/ssh-action@v0.1.7
         with:
-          host: ${{ secrets.PROD_SSH_HOST }}
-          username: ${{ secrets.PROD_SSH_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          passphrase: ${{ secrets.STAGING_SSH_PASSPHRASE }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
           script: |
             cd /srv/apps/ai_imutis
             set -euo pipefail
