@@ -124,7 +124,6 @@ jobs:
           passphrase: ${{ secrets.SSH_PASSPHRASE }}
           script: |
             cd /srv/apps/ai_imutis
-#            printf "%s" "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
             docker compose pull || true
             docker compose up -d --remove-orphans
 
