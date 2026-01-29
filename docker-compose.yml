@@ -1,42 +1,154 @@
-services:
-  db:
-    build:
-      context: ./db
-      dockerfile: Dockerfile
-    platform: linux/arm64/v8
-    container_name: ai-imutis-db
-    env_file:
-      - .env
-    # Fixed: Aligned with env_file, not inside it
-    environment:
-      - POSTGRES_HOST_AUTH_METHOD=trust
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+name: Build, push and deploy images
 
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    platform: linux/arm64/v8
-    container_name: ai-imutis-backend
-    ports:
-      - "8000:8000"
-    environment:
-      NODE_ENV: development
-      DATABASE_URL: ${DATABASE_URL}
-    volumes:
-      - .:/app
-    depends_on:
-      db:
-        condition: service_healthy
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+on:
+  push:
+    branches: [ 'main', 'staging', 'develop' ]
+    tags:
+      - 'v*.*.*'
 
-volumes:
-  postgres_data:
+env:
+  IMAGE_PREFIX: ${{ secrets.DOCKERHUB_USERNAME }}
+  DB_IMAGE_NAME: ai-imutis-db
+  BACKEND_IMAGE_NAME: ai-imutis
+
+jobs:
+  lint-and-test:
+    name: Run linters and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Static import check
+        run: |
+          python -m compileall app
+
+      - name: Run ruff linter
+        run: |
+          pip install ruff
+          ruff check .
+
+      - name: Check YAML files
+        run: |
+          pip install yamllint || true
+  #          for file in k8s/*.yaml helm/ai-imutis/values*.yaml; do
+  #            echo "Validating $file"
+  #            if command -v yamllint &> /dev/null; then
+  #              yamllint -d relaxed "$file"
+  #            fi
+  #          done
+
+  build-and-push:
+    name: Build & push images
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    outputs:
+      db_image: ${{ steps.set_db_output.outputs.image }}
+      backend_image: ${{ steps.set_backend_output.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          SHORT=${GITHUB_SHA::8}
+          echo "db_tag=${IMAGE_PREFIX}/${DB_IMAGE_NAME}:${SHORT}" >> $GITHUB_OUTPUT
+          echo "backend_tag=${IMAGE_PREFIX}/${BACKEND_IMAGE_NAME}:${SHORT}" >> $GITHUB_OUTPUT
+
+      - name: Build & push DB image
+        id: build_db
+        uses: docker/build-push-action@v5
+        with:
+          context: ./db
+          file: ./db/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ env.DB_IMAGE_NAME }}:latest
+            ${{ steps.meta.outputs.db_tag }}
+
+      - name: Set DB image output
+        id: set_db_output
+        run: echo "image=${{ steps.meta.outputs.db_tag }}" >> $GITHUB_OUTPUT
+
+      - name: Build & push Backend image
+        id: build_backend
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+            ${{ steps.meta.outputs.backend_tag }}
+
+      - name: Set Backend image output
+        id: set_backend_output
+        run: echo "image=${{ steps.meta.outputs.backend_tag }}" >> $GITHUB_OUTPUT
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build-and-push
+    if: startsWith(github.ref, 'refs/heads/staging') || startsWith(github.ref, 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to staging host via SSH (Docker Compose)
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          script: |
+            cd /srv/apps/ai_imutis
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+  deploy-production:
+    name: Deploy to Production
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy to production host via SSH (docker compose)
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          script: |
+            cd /srv/apps/ai_imutis
+            set -euo pipefail
+            BACKEND_IMAGE=${{ needs.build-and-push.outputs.backend_image }}
+            DB_IMAGE=${{ needs.build-and-push.outputs.db_image }}
+            printf "%s" "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+            docker compose -f docker-compose.staging.yml pull || true
+            docker compose -f docker-compose.staging.yml up -d --remove-orphans
+            printf "%s" "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+            docker compose -f docker-compose.production.yml pull || true
+            docker compose -f docker-compose.production.yml up -d --remove-orphans
